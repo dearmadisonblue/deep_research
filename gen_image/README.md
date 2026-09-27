@@ -390,13 +390,9 @@ def use_batch(batch: int) -> None:
 
 def use_output_name(name: str) -> None:
     """Set the filename prefix used for saved images."""
-
-def use_save(enabled: bool) -> None:
-    """Enable or disable image-file saving for the current workflow."""
 ```
 
 Image references are ordered. Batch draws return one PIL image per batch item.
-Disabling saving does not affect the returned image.
 
 ## Random-seed API
 
@@ -410,6 +406,20 @@ the lifetime of the Python process. Batch items use consecutive seeds starting
 from the configured value. Passing `None` restores a fresh automatic seed for
 each draw. This setting affects generation noise only; it does not seed Python,
 NumPy, or Torch random-number generators.
+
+## Saving API
+
+```python
+def set_saving(enabled: bool) -> None:
+    """Enable or disable saving generated images to files."""
+
+def is_saving() -> bool:
+    """Return whether generated images are saved to files."""
+```
+
+Saving is enabled by default. The setting applies to subsequent draws and
+survives model switches for the lifetime of the Python process. Disabling
+saving does not affect the returned image or the logging setting.
 
 ## Logging API
 
@@ -433,7 +443,7 @@ def draw(workflow: Workflow) -> Image.Image | list[Image.Image]:
 ```
 
 `draw()` executes the workflow in an isolated effect context, generates the
-requested image or batch, saves enabled outputs under `root/media/photos`,
+requested image or batch, saves images under `root/media/photos` when enabled,
 writes enabled provenance logs, and returns the generated PIL image or images.
 It never displays or otherwise presents them.
 

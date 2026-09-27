@@ -169,7 +169,7 @@ def draw(workflow: Workflow) -> Image.Image | list[Image.Image]:
         ", ".join(f"{item.id}@{item.strength:g}" for item in spec.adapters) or "none",
     )
     print("Batch:", spec.batch)
-    print("Saving:", "enabled" if spec.save else "disabled")
+    print("Saving:", "enabled" if spec.saving_enabled else "disabled")
 
     rt = _runtime()
     if rt.torch.cuda.is_available():
@@ -190,7 +190,7 @@ def draw(workflow: Workflow) -> Image.Image | list[Image.Image]:
     output_paths: list[Path | None] = []
     for index, (image, seed) in enumerate(zip(generated, seeds), start=1):
         path: Path | None = None
-        if spec.save:
+        if spec.saving_enabled:
             suffix = f"-{index:02d}" if len(generated) > 1 else ""
             filename = f"{spec.output_name}-{spec.model_id}-{timestamp_slug}-{seed}{suffix}.png"
             path = atomic_save_png(image, run_dir / filename)

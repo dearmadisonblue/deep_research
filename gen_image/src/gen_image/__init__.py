@@ -27,7 +27,7 @@ from .generation import draw
 from .models import current_model, load_model, unload_model
 from .provenance import is_logging, set_logging
 from .registry import available_models, model_spec
-from .runtime import init, set_random_seed
+from .runtime import init, is_saving, set_random_seed, set_saving
 from .workflows import (
     Workflow,
     use_adapter,
@@ -37,7 +37,6 @@ from .workflows import (
     use_negative_prompt,
     use_output_name,
     use_sampler,
-    use_save,
     use_size,
     use_steps,
 )
@@ -58,6 +57,7 @@ __all__ = [
     "get_prompt",
     "init",
     "is_logging",
+    "is_saving",
     "load_model",
     "model_spec",
     "print_runtime_memory",
@@ -68,6 +68,7 @@ __all__ = [
     "set_default_adapters",
     "set_logging",
     "set_random_seed",
+    "set_saving",
     "show_adapter_cache",
     "status",
     "unload_model",
@@ -78,7 +79,6 @@ __all__ = [
     "use_negative_prompt",
     "use_output_name",
     "use_sampler",
-    "use_save",
     "use_size",
     "use_steps",
 ]

@@ -34,6 +34,9 @@ def test_package_module_layout() -> None:
     assert {path.name for path in SOURCE.glob("*.py")} == EXPECTED_MODULES
 
 
-def test_public_api_exports_logging_accessors() -> None:
+def test_public_api_exports_session_accessors() -> None:
     assert gen_image.set_logging is not None
     assert gen_image.is_logging is not None
+    assert gen_image.set_saving is not None
+    assert gen_image.is_saving is not None
+    assert not hasattr(gen_image, "use_save")

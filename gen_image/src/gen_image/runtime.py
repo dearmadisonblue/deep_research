@@ -95,10 +95,23 @@ class _SessionState:
     model_switch_history: list[dict[str, Any]] = field(default_factory=list)
     model_file_paths: dict[ModelId, dict[str, Path]] = field(default_factory=dict)
     logging_enabled: bool = True
+    saving_enabled: bool = True
     random_seed: int | None = None
 
 
 _STATE = _SessionState()
+
+
+def set_saving(enabled: bool) -> None:
+    """Enable or disable saving generated images to files."""
+    if not isinstance(enabled, bool):
+        raise TypeError("set_saving() requires a boolean")
+    _STATE.saving_enabled = enabled
+
+
+def is_saving() -> bool:
+    """Return whether generated images are saved to files."""
+    return _STATE.saving_enabled
 
 
 def set_random_seed(seed: int | None) -> None:

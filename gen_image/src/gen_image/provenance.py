@@ -112,7 +112,7 @@ def _build_log_payload(
             "scheduler": "flux2" if spec.model_id == "klein" else "simple",
             "negative_prompt": spec.negative_prompt,
             "batch": spec.batch,
-            "save": spec.save,
+            "saving_enabled": spec.saving_enabled,
         },
         "assets": [
             {

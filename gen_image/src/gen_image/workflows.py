@@ -46,7 +46,6 @@ class _WorkflowContext:
     negative_prompt: str | Prompt | None = None
     batch: int | None = None
     output_name: str | None = None
-    save: bool = True
 
 
 _CURRENT_WORKFLOW: ContextVar[_WorkflowContext | None] = ContextVar(
@@ -136,13 +135,6 @@ def use_output_name(name: str) -> None:
     _context().output_name = name
 
 
-def use_save(enabled: bool) -> None:
-    """Enable or disable image-file saving for the current workflow."""
-    if not isinstance(enabled, bool):
-        raise TypeError("use_save() requires a boolean")
-    _context().save = enabled
-
-
 def reference_output_size(
     path: Path, *, total_pixels: float, multiple: int
 ) -> tuple[int, int]:
@@ -174,7 +166,7 @@ class _DrawSpec:
     negative_prompt: str
     batch: int
     output_name: str
-    save: bool
+    saving_enabled: bool
 
 
 def _workflow_source_hash(workflow: Workflow) -> str | None:
@@ -265,5 +257,5 @@ def _resolve_workflow(workflow: Workflow) -> _DrawSpec:
         negative_prompt=str(resolved.get("negative_prompt", "")),
         batch=int(resolved["batch"]),
         output_name=slugify(str(resolved.get("output_name", default_name))),
-        save=context.save,
+        saving_enabled=_STATE.saving_enabled,
     )
