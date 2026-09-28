@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import nullcontext
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -8,6 +9,7 @@ from uuid import uuid4
 from PIL import Image
 
 from . import adapters
+from .catalog import Asset
 from .comfy_backend import (
     call_node,
     comfy_image_to_pil,
@@ -24,7 +26,16 @@ from .provenance import (
 )
 from .registry import MODEL_REGISTRY
 from .runtime import _STATE, _runtime
-from .workflows import Workflow, _DrawSpec, _resolve_workflow
+from .workflows import ImageUse, Workflow, _DrawSpec, _resolve_workflow
+
+
+def _reference_tensor(image_use: ImageUse, *, preserve_alpha: bool) -> Any:
+    source = image_use.source
+    image_context = (
+        Image.open(source.path) if isinstance(source, Asset) else nullcontext(source)
+    )
+    with image_context as image:
+        return pil_to_comfy_image(image, preserve_alpha=preserve_alpha)
 
 
 def _prepare_klein_conditioning(spec: _DrawSpec) -> tuple[Any, Any, None]:
@@ -36,8 +47,7 @@ def _prepare_klein_conditioning(spec: _DrawSpec) -> tuple[Any, Any, None]:
         else call_node("ConditioningZeroOut", conditioning=positive)[0]
     )
     for image_use in spec.images:
-        with Image.open(image_use.asset.path) as image:
-            tensor = pil_to_comfy_image(image, preserve_alpha=False)
+        tensor = _reference_tensor(image_use, preserve_alpha=False)
         scaled = scale_comfy_image_to_total_pixels(tensor)
         latent = call_node("VAEEncode", pixels=scaled, vae=vae)[0]
         positive = call_node("ReferenceLatent", conditioning=positive, latent=latent)[0]
@@ -48,8 +58,9 @@ def _prepare_klein_conditioning(spec: _DrawSpec) -> tuple[Any, Any, None]:
 def _prepare_qwen_conditioning(spec: _DrawSpec) -> tuple[Any, Any, Any]:
     images: dict[str, Any] = {}
     for index, image_use in enumerate(spec.images, start=1):
-        with Image.open(image_use.asset.path) as image:
-            images[f"image_{index}"] = pil_to_comfy_image(image, preserve_alpha=True)
+        images[f"image_{index}"] = _reference_tensor(
+            image_use, preserve_alpha=True
+        )
     return call_node(
         "TextEncodeQwenImage21",
         clip=_STATE.model["clip"],

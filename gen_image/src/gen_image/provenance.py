@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from collections.abc import Mapping
@@ -9,10 +10,10 @@ from typing import Any
 from PIL import Image
 
 from . import adapters
-from .catalog import sha256_text
+from .catalog import Asset, sha256_text
 from .registry import MODEL_REGISTRY
 from .runtime import _STATE, _runtime
-from .workflows import _DrawSpec
+from .workflows import ImageUse, _DrawSpec
 
 
 def set_logging(enabled: bool) -> None:
@@ -52,6 +53,33 @@ def _relative_to_root(path: Path) -> str:
         return path.relative_to(_runtime().paths.root_dir).as_posix()
     except ValueError:
         return str(path)
+
+
+def _reference_record(image_use: ImageUse, index: int, model_id: str) -> dict[str, Any]:
+    source = image_use.source
+    if isinstance(source, Asset):
+        record: dict[str, Any] = {
+            "id": source.id,
+            "kind": source.kind,
+            "path": _relative_to_root(source.path),
+            "sha256": source.content_sha256(),
+        }
+    else:
+        digest = hashlib.sha256()
+        digest.update(f"{source.mode}:{source.width}x{source.height}:".encode())
+        digest.update(source.tobytes())
+        record = {
+            "id": None,
+            "kind": "image",
+            "path": None,
+            "sha256": digest.hexdigest(),
+        }
+    return {
+        **record,
+        "role": "reference",
+        "qwen_token": f"<image{index}>" if model_id == "qwen" else None,
+        "strength": image_use.strength,
+    }
 
 
 def _build_log_payload(
@@ -115,15 +143,7 @@ def _build_log_payload(
             "saving_enabled": spec.saving_enabled,
         },
         "assets": [
-            {
-                "id": image_use.asset.id,
-                "kind": image_use.asset.kind,
-                "path": _relative_to_root(image_use.asset.path),
-                "sha256": image_use.asset.content_sha256(),
-                "role": "reference",
-                "qwen_token": f"<image{index}>" if spec.model_id == "qwen" else None,
-                "strength": image_use.strength,
-            }
+            _reference_record(image_use, index, spec.model_id)
             for index, image_use in enumerate(spec.images, start=1)
         ],
         "adapters": [

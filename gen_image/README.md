@@ -364,7 +364,7 @@ def show_adapter_cache() -> None:
 These functions must be called while `draw()` is executing a workflow.
 
 ```python
-def use_image(asset: Asset | str, *, strength: float | None = None) -> None:
+def use_image(asset: Asset | str | Image.Image, *, strength: float | None = None) -> None:
     """Add an ordered image reference to the current workflow."""
 
 def use_adapter(name: str, strength: float = 1.0) -> None:
@@ -446,6 +446,22 @@ def draw(workflow: Workflow) -> Image.Image | list[Image.Image]:
 requested image or batch, saves images under `root/media/photos` when enabled,
 writes enabled provenance logs, and returns the generated PIL image or images.
 It never displays or otherwise presents them.
+
+A single image returned by `draw()` can be used directly as a reference in a
+later workflow, even when saving is disabled:
+
+```python
+first = draw(original_workflow)
+
+def photofy():
+    use_image(first)
+    return "Convert this image to a photorealistic style"
+
+second = draw(photofy)
+```
+
+For a batch result, select one image from the returned list before passing it
+to `use_image()`.
 
 ## Prompt files
 

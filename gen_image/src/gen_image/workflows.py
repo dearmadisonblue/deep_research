@@ -31,7 +31,7 @@ def round_to_multiple(value: int, multiple: int) -> int:
 
 @dataclass(frozen=True)
 class ImageUse:
-    asset: Asset
+    source: Asset | Image.Image
     strength: float | None = None
 
 
@@ -61,17 +61,21 @@ def _context() -> _WorkflowContext:
     return context
 
 
-def use_image(asset: Asset | str, *, strength: float | None = None) -> None:
+def use_image(asset: Asset | str | Image.Image, *, strength: float | None = None) -> None:
     """Add an ordered image reference to the current workflow."""
     if isinstance(asset, str):
         asset = get_asset(asset)
-    if asset.kind != "image":
+    if isinstance(asset, Asset) and asset.kind != "image":
         raise TypeError(f"use_image() requires an image asset, got {asset.kind!r}")
+    if not isinstance(asset, (Asset, Image.Image)):
+        raise TypeError("use_image() requires an image asset, asset ID, or PIL image")
     if strength not in (None, 1.0):
         raise NotImplementedError(
             "Reference strength currently supports only None or 1.0."
         )
-    _context().images.append(ImageUse(asset=asset, strength=strength))
+    # Hold a snapshot so later changes to the caller's image cannot change this draw.
+    source = asset.copy() if isinstance(asset, Image.Image) else asset
+    _context().images.append(ImageUse(source=source, strength=strength))
 
 
 def use_adapter(name: str, strength: float = 1.0) -> None:
@@ -136,10 +140,13 @@ def use_output_name(name: str) -> None:
 
 
 def reference_output_size(
-    path: Path, *, total_pixels: float, multiple: int
+    source: Path | Image.Image, *, total_pixels: float, multiple: int
 ) -> tuple[int, int]:
-    with Image.open(path) as image:
-        width, height = ImageOps.exif_transpose(image).size
+    if isinstance(source, Path):
+        with Image.open(source) as image:
+            width, height = ImageOps.exif_transpose(image).size
+    else:
+        width, height = ImageOps.exif_transpose(source).size
     scale = math.sqrt(total_pixels / (width * height))
     return (
         round_to_multiple(round(width * scale), multiple),
@@ -200,15 +207,17 @@ def _resolve_workflow(workflow: Workflow) -> _DrawSpec:
     if context.size is not None:
         resolved["width"], resolved["height"] = context.size
     elif context.images and not size_explicit:
+        first_source = context.images[0].source
+        reference = first_source.path if isinstance(first_source, Asset) else first_source
         if model_id == "qwen":
             resolved["width"], resolved["height"] = reference_output_size(
-                context.images[0].asset.path,
+                reference,
                 total_pixels=QWEN_REFERENCE_RESOLUTION**2,
                 multiple=32,
             )
         else:
             resolved["width"], resolved["height"] = reference_output_size(
-                context.images[0].asset.path,
+                reference,
                 total_pixels=REFERENCE_MEGAPIXELS * 1024 * 1024,
                 multiple=16,
             )
