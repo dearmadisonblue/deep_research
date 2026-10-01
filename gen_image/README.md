@@ -16,10 +16,12 @@ pip install --upgrade "git+https://github.com/dearmadisonblue/deep_research.git@
 
 Diffusers is installed from the official GitHub default branch, without a
 fixed commit or version, because the current PyPI release does not yet include
-Qwen 2.1 support. All other dependencies are ordinary, unversioned package
-requirements. Pip can reuse already-installed packages; this package does not
-pin or request a replacement ML stack. Dependencies of the libraries themselves
-can still impose their own compatibility requirements.
+Qwen 2.1 support. TorchAO requires version 0.18.0 or newer for the verified
+Diffusers and checkpoint-loader imports; this is a minimum requirement, not an
+exact version pin. All remaining dependencies are ordinary, unversioned package
+requirements. Pip can reuse compatible installed packages and upgrades an older
+TorchAO as needed. Dependencies of the libraries themselves can still impose
+their own compatibility requirements.
 
 Installing this package also installs its GitHub Diffusers dependency; no
 separate Diffusers installation command is needed. Restart an existing notebook

@@ -12,7 +12,7 @@ dependencies = [
   "huggingface-hub",
   "torch",
   "torchvision",
-  "torchao",
+  "torchao>=0.18.0",
   "transformers",
   "diffusers @ git+https://github.com/huggingface/diffusers.git",
   "accelerate",
