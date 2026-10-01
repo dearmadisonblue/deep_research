@@ -154,25 +154,25 @@ transparency is requested explicitly.
 
 ## Memory and first GPU trial
 
-By default all three components stay on the GPU. The saved weights total about
-16.1 GiB, before activations, prompt embeddings, and KV caches. Leave additional
-VRAM and host RAM available. The loader avoids dense weight initialization,
-and VAE tiling is enabled to reduce decoding peaks.
+The loader enables Diffusers `enable_model_cpu_offload()` by default. All three
+components start on CPU; Accelerate brings whole components onto the GPU when
+needed. The transformer stays on GPU throughout denoising, the text encoder is
+offloaded when the transformer starts, and the transformer is offloaded before
+VAE decoding. The pipeline offloads the components after a successful run.
+Reference-image editing also invokes the VAE before denoising, so some component
+residency can overlap during that phase.
 
-To keep the transformer resident while moving the whole text encoder to the
-GPU only during prompt encoding, set this before `load_model()`:
+The saved weights total about 16.1 GiB. Allow sufficient host RAM for those
+weights, plus extra VRAM for the active component, activations, prompt embeddings,
+and KV caches. Whole-model offloading reduces resident weight memory but does not
+guarantee that every resolution or number of references fits. VAE tiling remains
+enabled to reduce decoding peaks. The loader avoids dense weight initialization
+and transfers the INT8/FP8 weights without casting the whole pipeline to a common
+dtype. FP8 encoder layers still compute in BF16 and restore their FP8 storage.
 
-```python
-import os
-
-os.environ["GEN_IMAGE_TEXT_ENCODER_OFFLOAD"] = "1"
-```
-
-This reduces VRAM during denoising, but temporarily needs space for the encoder
-while encoding each prompt, and transfers about 9 GB each time. The default is
-`"0"`. Change it before loading or use `load_model("qwen", force_reload=True)`.
-The loader never calls generic pipeline CPU offloading or casts the INT8
-transformer to another dtype.
+No environment setting is required. This replaces the previous encoder-only
+offloading option (`GEN_IMAGE_TEXT_ENCODER_OFFLOAD`). The public loading and
+workflow APIs are unchanged.
 
 A minimal trial needs no assets or adapters:
 

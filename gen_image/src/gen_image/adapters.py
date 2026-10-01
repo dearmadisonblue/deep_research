@@ -144,7 +144,7 @@ def _adapter_signature(adapters: Sequence[AdapterUse]) -> AdapterSignature:
 
 
 def _model_for_adapters(adapters: Sequence[AdapterUse]) -> Any:
-    """Select non-fused PEFT adapters on one resident quantized pipeline."""
+    """Select non-fused PEFT adapters on one quantized pipeline."""
     pipeline = _STATE.model["pipeline"]
     loaded = _STATE.model.setdefault("loaded_adapters", {})
     signature = _adapter_signature(adapters)

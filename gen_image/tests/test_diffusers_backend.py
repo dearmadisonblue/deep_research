@@ -18,6 +18,7 @@ from gen_image.diffusers_backend import (
     _arm_fp8_storage_hooks,
     _assign_weights,
     _load_prequantized,
+    load_pipeline,
 )
 from gen_image.registry import BASE_MODEL_ID
 from gen_image.workflows import _resolve_workflow
@@ -25,7 +26,7 @@ from safetensors.torch import save_file
 from torchao.prototype.safetensors.safetensors_support import flatten_tensor_state_dict
 from torchao.quantization import Int8Tensor, MappingType, PerRow
 from torchao.quantization.quantize_.workflows import QuantizeTensorToInt8Kwargs
-from transformers import Qwen3VLConfig, Qwen3VLForConditionalGeneration
+from transformers import BatchFeature, Qwen3VLConfig, Qwen3VLForConditionalGeneration
 
 import gen_image
 from gen_image import adapters, generation, runtime
@@ -138,6 +139,15 @@ class _Processor:
     def apply_chat_template(self, *args, **kwargs):
         return [[1, 2]]
 
+    def __call__(self, *, text, images=None, **kwargs):
+        ids = [2, 3, *([1] if images else []), 4, 5, 6]
+        return BatchFeature(
+            {
+                "input_ids": torch.tensor([ids] * len(text)),
+                "attention_mask": torch.ones(len(text), len(ids), dtype=torch.long),
+            }
+        )
+
 
 def _tiny_transformer():
     return (
@@ -155,8 +165,9 @@ def _tiny_transformer():
     )
 
 
+@pytest.mark.parametrize("offload", [False, True])
 def test_lora_switching_keeps_int8_weights_and_restores_bare_model(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, offload
 ):
     transformer = _tiny_transformer()
     projection = transformer.transformer_blocks[0].attn.to_q
@@ -171,6 +182,12 @@ def test_lora_switching_keeps_int8_weights_and_restores_bare_model(
         processor=_Processor(),
         vae=None,
     )
+    if offload:
+        # Exercise real Accelerate hooks on CPU; this does not measure CUDA VRAM.
+        monkeypatch.setattr(
+            "diffusers.pipelines.pipeline_utils.get_device", lambda: "cpu:0"
+        )
+        pipeline.enable_model_cpu_offload(device="cpu:0")
     state = {"model_id": "qwen", "pipeline": pipeline}
     monkeypatch.setattr(runtime._STATE, "model", state)
     fake_runtime = SimpleNamespace(
@@ -214,6 +231,149 @@ def test_lora_switching_keeps_int8_weights_and_restores_bare_model(
     assert torch.equal(
         transformer.transformer_blocks[0].attn.to_q.weight.qdata, saved_qdata
     )
+    if offload:
+        assert transformer._hf_hook.execution_device == torch.device("cpu:0")
+
+
+def test_loader_offloading_keeps_quantized_storage_across_generation(
+    tmp_path, monkeypatch
+):
+    from PIL import Image
+    from transformers import Qwen3VLProcessor
+
+    torch.set_num_threads(1)
+    transformer = _tiny_transformer()
+    projection = transformer.transformer_blocks[0].attn.to_q
+    projection.weight = torch.nn.Parameter(
+        _int8(projection.weight.detach()), requires_grad=False
+    )
+    qdata = projection.weight.qdata.clone()
+    encoder = (
+        Qwen3VLForConditionalGeneration(
+            Qwen3VLConfig(
+                text_config={
+                    "vocab_size": 32,
+                    "hidden_size": 16,
+                    "intermediate_size": 32,
+                    "num_hidden_layers": 1,
+                    "num_attention_heads": 2,
+                    "num_key_value_heads": 2,
+                    "head_dim": 8,
+                    "rope_parameters": {
+                        "rope_type": "default",
+                        "rope_theta": 10000.0,
+                        "mrope_section": [1, 1, 2],
+                    },
+                },
+                vision_config={
+                    "depth": 1,
+                    "hidden_size": 16,
+                    "intermediate_size": 32,
+                    "num_heads": 2,
+                    "out_hidden_size": 16,
+                    "patch_size": 2,
+                    "num_position_embeddings": 16,
+                    "deepstack_visual_indexes": [],
+                },
+                image_token_id=1,
+                video_token_id=28,
+                vision_start_token_id=29,
+                vision_end_token_id=30,
+            )
+        )
+        .to(dtype=torch.bfloat16)
+        .eval()
+    )
+    for module in encoder.modules():
+        if isinstance(module, torch.nn.Linear):
+            module.to(dtype=torch.float8_e4m3fn)
+    vae = (
+        AutoencoderKLQwenImage21(
+            base_dim=4,
+            decoder_base_dim=4,
+            z_dim=4,
+            dim_mult=[1, 1, 1, 1, 1],
+            num_res_blocks=1,
+            temperal_downsample=[False] * 4,
+            latents_mean=[0.0] * 4,
+            latents_std=[1.0] * 4,
+            is_residual=False,
+        )
+        .to(dtype=torch.bfloat16)
+        .eval()
+    )
+    config = tmp_path / "config"
+    transformer.save_config(config / "transformer")
+    encoder.config.save_pretrained(config / "text_encoder")
+    vae.save_config(config / "vae")
+    FlowMatchEulerDiscreteScheduler().save_pretrained(config / "scheduler")
+    paths = {
+        "pipeline_config": config,
+        "diffusion": tmp_path / "int8.safetensors",
+        "text_encoder": tmp_path / "fp8.safetensors",
+        "vae": tmp_path / "vae.safetensors",
+    }
+    _checkpoint(paths["diffusion"], transformer.state_dict())
+    _checkpoint(
+        paths["text_encoder"],
+        encoder.state_dict(),
+        component="text_encoder",
+        scheme="fp8",
+    )
+    save_file(vae.state_dict(), paths["vae"])
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(torch.cuda, "is_bf16_supported", lambda: True)
+    monkeypatch.setattr(
+        Qwen3VLProcessor, "from_pretrained", lambda *args, **kwargs: _Processor()
+    )
+    enable = QwenImage21Pipeline.enable_model_cpu_offload
+    requested_devices = []
+
+    def cpu_test_offload(self, *args, device=None, **kwargs):
+        requested_devices.append(device)
+        return enable(self, *args, device="cpu:0", **kwargs)
+
+    monkeypatch.setattr(
+        QwenImage21Pipeline, "enable_model_cpu_offload", cpu_test_offload
+    )
+    pipeline = load_pipeline(paths)
+    assert requested_devices == [torch.device("cuda")]
+    assert pipeline._execution_device == torch.device("cpu:0")
+    assert len(pipeline._all_hooks) == 3
+    fp8_names = [
+        name
+        for name, p in pipeline.text_encoder.named_parameters()
+        if p.dtype == torch.float8_e4m3fn
+    ]
+    assert fp8_names
+    # Cover hook reinstallation after complete rendering, then reference VAE
+    # encoding and CFG. Real quantized modules execute; only the device is CPU.
+    for reference in [None, Image.new("RGBA", (32, 32), "red")]:
+        result = pipeline(
+            prompt="test",
+            image=reference,
+            negative_prompt="",
+            true_cfg_scale=2,
+            width=32,
+            height=32,
+            output_resolution=32,
+            num_inference_steps=2,
+            generator=torch.Generator(device="cpu").manual_seed(7),
+        )
+        assert result.images[0].mode == "RGBA"
+        assert result.images[0].size == (32, 32)
+        assert len(pipeline._all_hooks) == 3
+        assert pipeline._execution_device == torch.device("cpu:0")
+        weight = pipeline.transformer.transformer_blocks[0].attn.to_q.weight
+        assert isinstance(weight, Int8Tensor)
+        assert torch.equal(weight.qdata, qdata)
+        params = dict(pipeline.text_encoder.named_parameters())
+        assert all(params[name].dtype == torch.float8_e4m3fn for name in fp8_names)
+        assert all(
+            p.device.type == "cpu"
+            for model in [pipeline.transformer, pipeline.text_encoder, pipeline.vae]
+            for p in model.parameters()
+        )
 
 
 def test_workflow_maps_references_cfg_and_wrapped_batch_seeds(monkeypatch):

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 from importlib.metadata import version
 from pathlib import Path
 from typing import Any
@@ -147,19 +146,6 @@ def _arm_fp8_storage_hooks(encoder: Any) -> int:
     return count
 
 
-def _stage_encoder(encoder: Any, device: Any) -> None:
-    """Optional whole-encoder streaming; the quantized transformer stays resident."""
-
-    def onload(module: Any, args: Any) -> None:
-        module.to(device=device)  # Device only: preserve FP8 storage.
-
-    def offload(module: Any, args: Any, output: Any) -> None:
-        module.to(device="cpu")
-
-    encoder.register_forward_pre_hook(onload)
-    encoder.register_forward_hook(offload, always_call=True)
-
-
 def load_pipeline(paths: dict[str, Path]) -> Any:
     import torch
     from diffusers import (
@@ -186,8 +172,6 @@ def load_pipeline(paths: dict[str, Path]) -> Any:
         lambda: QwenImage21Transformer2DModel.from_config(transformer_config),
         _load_prequantized(paths["diffusion"], component="transformer", scheme="int8"),
     )
-    # .to(dtype=...) can destroy the checkpoint's TorchAO subclass semantics.
-    transformer.to(device=device)
     encoder_config = AutoConfig.from_pretrained(
         config_root / "text_encoder", local_files_only=True
     )
@@ -198,16 +182,11 @@ def load_pipeline(paths: dict[str, Path]) -> Any:
         ),
     )
     _arm_fp8_storage_hooks(encoder)
-    offload = os.environ.get("GEN_IMAGE_TEXT_ENCODER_OFFLOAD", "0") == "1"
-    if offload:
-        _stage_encoder(encoder, device)
-    else:
-        encoder.to(device=device)
     vae_config = AutoencoderKLQwenImage21.load_config(config_root / "vae")
     vae = _assign_weights(
         lambda: AutoencoderKLQwenImage21.from_config(vae_config),
         load_file(paths["vae"], device="cpu"),
-    ).to(device=device, dtype=torch.bfloat16)
+    ).to(dtype=torch.bfloat16)
     vae.enable_tiling()
     scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(
         config_root / "scheduler", local_files_only=True
@@ -216,20 +195,17 @@ def load_pipeline(paths: dict[str, Path]) -> Any:
         config_root / "processor", local_files_only=True
     )
 
-    class _ResidentTransformerPipeline(QwenImage21Pipeline):
-        @property
-        def _execution_device(self) -> Any:
-            # The text encoder may be on CPU between forwards. Sampling and
-            # processor inputs always target the resident transformer's GPU.
-            return self.transformer.device
-
-    pipeline = _ResidentTransformerPipeline(
+    pipeline = QwenImage21Pipeline(
         transformer=transformer,
         text_encoder=encoder,
         vae=vae,
         scheduler=scheduler,
         processor=processor,
     )
-    pipeline._gen_image_encoder_offload = offload
-    # Don't call pipeline.to(dtype=...) or generic pipeline CPU-offload methods.
+    # Components start on CPU. Accelerate moves whole components as needed and
+    # keeps the transformer on CUDA throughout denoising. The standard pipeline
+    # infers the execution device from those hooks even while weights are on CPU.
+    # Device-only transfers preserve INT8 subclasses and mixed FP8/BF16 storage;
+    # never cast the whole pipeline to a common dtype.
+    pipeline.enable_model_cpu_offload(device=device)
     return pipeline

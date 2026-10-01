@@ -166,8 +166,8 @@ def _build_log_payload(
             "pipeline_config": {"repo_id": BASE_MODEL_ID, "revision": BASE_REVISION},
             "backend": "diffusers",
             "backend_versions": _runtime().backend_versions,
-            "text_encoder_offload": getattr(
-                _STATE.model["pipeline"], "_gen_image_encoder_offload", False
+            "model_cpu_offload": bool(
+                getattr(_STATE.model["pipeline"], "_all_hooks", [])
             ),
         },
         "runtime_memory": {
