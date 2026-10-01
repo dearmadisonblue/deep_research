@@ -11,7 +11,7 @@ from PIL import Image
 
 from . import adapters
 from .catalog import Asset, sha256_text
-from .registry import MODEL_REGISTRY
+from .registry import BASE_MODEL_ID, BASE_REVISION, MODEL_REGISTRY
 from .runtime import _STATE, _runtime
 from .workflows import ImageUse, _DrawSpec
 
@@ -101,13 +101,14 @@ def _build_log_payload(
             "filename": component["filename"],
             "repo_id": component["repo_id"],
             "repo_filename": component["repo_filename"],
+            "revision": component["revision"],
             "size": component["size"],
             "sha256": component["sha256"],
         }
         for name, component in model_cfg["components"].items()
     }
     return {
-        "schema": 1,
+        "schema": 2,
         "type": "generation_run",
         "run_id": run_id,
         "timestamp_utc": timestamp_utc,
@@ -137,7 +138,7 @@ def _build_log_payload(
             "steps": spec.steps,
             "guidance": spec.guidance,
             "sampler": spec.sampler,
-            "scheduler": "flux2" if spec.model_id == "klein" else "simple",
+            "scheduler": "FlowMatchEulerDiscreteScheduler",
             "negative_prompt": spec.negative_prompt,
             "batch": spec.batch,
             "saving_enabled": spec.saving_enabled,
@@ -162,8 +163,12 @@ def _build_log_payload(
             "quantization": model_cfg["quantization"],
             "license": model_cfg["license"],
             "components": components,
-            "comfy_git_revision": _runtime().comfy_git_revision,
-            "vram_state": _runtime().model_management.vram_state.name,
+            "pipeline_config": {"repo_id": BASE_MODEL_ID, "revision": BASE_REVISION},
+            "backend": "diffusers",
+            "backend_versions": _runtime().backend_versions,
+            "text_encoder_offload": getattr(
+                _STATE.model["pipeline"], "_gen_image_encoder_offload", False
+            ),
         },
         "runtime_memory": {
             "before_generation": memory_before,

@@ -4,11 +4,10 @@ from collections.abc import Callable
 from typing import Literal, TypeAlias
 from zoneinfo import ZoneInfo
 
-ModelId: TypeAlias = Literal["klein", "qwen"]
+ModelId: TypeAlias = Literal["qwen"]
 AssetKind: TypeAlias = Literal["image", "video"]
 SecretProvider: TypeAlias = Callable[[str], str | None]
 
-REFERENCE_MEGAPIXELS = 1.0
 QWEN_REFERENCE_RESOLUTION = 1024
 MAX_PATCHED_MODEL_CACHE = 2
 NYC_TIMEZONE = ZoneInfo("America/New_York")

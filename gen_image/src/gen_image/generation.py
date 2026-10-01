@@ -3,19 +3,12 @@ from __future__ import annotations
 from contextlib import nullcontext
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
 from uuid import uuid4
 
-from PIL import Image
+from PIL import Image, ImageOps
 
 from . import adapters
 from .catalog import Asset
-from .comfy_backend import (
-    call_node,
-    comfy_image_to_pil,
-    pil_to_comfy_image,
-    scale_comfy_image_to_total_pixels,
-)
 from .config import NYC_TIMEZONE, QWEN_REFERENCE_RESOLUTION
 from .diagnostics import print_runtime_memory
 from .provenance import (
@@ -29,125 +22,51 @@ from .runtime import _STATE, _runtime
 from .workflows import ImageUse, Workflow, _DrawSpec, _resolve_workflow
 
 
-def _reference_tensor(image_use: ImageUse, *, preserve_alpha: bool) -> Any:
+def _reference_image(image_use: ImageUse) -> Image.Image:
     source = image_use.source
     image_context = (
         Image.open(source.path) if isinstance(source, Asset) else nullcontext(source)
     )
     with image_context as image:
-        return pil_to_comfy_image(image, preserve_alpha=preserve_alpha)
-
-
-def _prepare_klein_conditioning(spec: _DrawSpec) -> tuple[Any, Any, None]:
-    clip, vae = _STATE.model["clip"], _STATE.model["vae"]
-    positive = call_node("CLIPTextEncode", clip=clip, text=spec.prompt)[0]
-    negative = (
-        call_node("CLIPTextEncode", clip=clip, text=spec.negative_prompt)[0]
-        if spec.negative_prompt.strip()
-        else call_node("ConditioningZeroOut", conditioning=positive)[0]
-    )
-    for image_use in spec.images:
-        tensor = _reference_tensor(image_use, preserve_alpha=False)
-        scaled = scale_comfy_image_to_total_pixels(tensor)
-        latent = call_node("VAEEncode", pixels=scaled, vae=vae)[0]
-        positive = call_node("ReferenceLatent", conditioning=positive, latent=latent)[0]
-        negative = call_node("ReferenceLatent", conditioning=negative, latent=latent)[0]
-    return positive, negative, None
-
-
-def _prepare_qwen_conditioning(spec: _DrawSpec) -> tuple[Any, Any, Any]:
-    images: dict[str, Any] = {}
-    for index, image_use in enumerate(spec.images, start=1):
-        images[f"image_{index}"] = _reference_tensor(
-            image_use, preserve_alpha=True
-        )
-    return call_node(
-        "TextEncodeQwenImage21",
-        clip=_STATE.model["clip"],
-        prompt=spec.prompt,
-        negative_prompt=spec.negative_prompt,
-        vae=_STATE.model["vae"],
-        resolution=QWEN_REFERENCE_RESOLUTION,
-        images=images,
-    )  # type: ignore[return-value]
-
-
-def _generate_klein(spec: _DrawSpec, model: Any, seeds: list[int]) -> list[Image.Image]:
-    positive, negative, _ = _prepare_klein_conditioning(spec)
-    guider = call_node(
-        "CFGGuider",
-        model=model,
-        positive=positive,
-        negative=negative,
-        cfg=spec.guidance,
-    )[0]
-    sampler = call_node("KSamplerSelect", sampler_name=spec.sampler)[0]
-    sigmas = call_node(
-        "Flux2Scheduler", steps=spec.steps, width=spec.width, height=spec.height
-    )[0]
-    images: list[Image.Image] = []
-    for seed in seeds:
-        noise = call_node("RandomNoise", noise_seed=seed)[0]
-        latent = call_node(
-            "EmptyFlux2LatentImage", width=spec.width, height=spec.height, batch_size=1
-        )[0]
-        sampled = call_node(
-            "SamplerCustomAdvanced",
-            noise=noise,
-            guider=guider,
-            sampler=sampler,
-            sigmas=sigmas,
-            latent_image=latent,
-        )[0]
-        decoded = call_node("VAEDecode", samples=sampled, vae=_STATE.model["vae"])[0]
-        if decoded.ndim != 4 or decoded.shape[0] != 1:
-            raise RuntimeError(f"Unexpected decoded tensor: {tuple(decoded.shape)}")
-        images.append(comfy_image_to_pil(decoded[0]))
-    return images
-
-
-def _generate_qwen(spec: _DrawSpec, model: Any, seeds: list[int]) -> list[Image.Image]:
-    positive, negative, edit_latent = _prepare_qwen_conditioning(spec)
-    images: list[Image.Image] = []
-    for seed in seeds:
-        latent = (
-            edit_latent
-            if spec.images and not spec.size_explicit
-            else call_node(
-                "EmptyLatentImage", width=spec.width, height=spec.height, batch_size=1
-            )[0]
-        )
-        sampled = call_node(
-            "KSampler",
-            model=model,
-            seed=seed,
-            steps=spec.steps,
-            cfg=spec.guidance,
-            sampler_name=spec.sampler,
-            scheduler="simple",
-            positive=positive,
-            negative=negative,
-            latent_image=latent,
-            denoise=1.0,
-        )[0]
-        decoded = call_node("VAEDecode", samples=sampled, vae=_STATE.model["vae"])[0]
-        if decoded.ndim != 4 or decoded.shape[0] != 1:
-            raise RuntimeError(f"Unexpected decoded tensor: {tuple(decoded.shape)}")
-        images.append(comfy_image_to_pil(decoded[0]))
-    return images
+        return ImageOps.exif_transpose(image).convert("RGBA").copy()
 
 
 def _generate_images(spec: _DrawSpec) -> tuple[list[Image.Image], list[int]]:
-    if {"model_id", "model", "clip", "vae"} - _STATE.model.keys():
+    if {"model_id", "pipeline"} - _STATE.model.keys():
         raise RuntimeError("No model is loaded.")
     if spec.model_id != _STATE.model.get("model_id"):
         raise RuntimeError("The active model changed while resolving the workflow.")
-    model = adapters._model_for_adapters(spec.adapters)
+    if spec.sampler != "euler":
+        raise ValueError(
+            "The Diffusers Qwen 2.1 backend currently supports use_sampler('euler') only."
+        )
+    pipeline = adapters._model_for_adapters(spec.adapters)
+    references = [_reference_image(item) for item in spec.images] or None
     seeds = [(spec.seed + index) & 0xFFFFFFFFFFFFFFFF for index in range(spec.batch)]
-    with _runtime().torch.no_grad():
-        if spec.model_id == "klein":
-            return _generate_klein(spec, model, seeds), seeds
-        return _generate_qwen(spec, model, seeds), seeds
+    torch = _runtime().torch
+    images: list[Image.Image] = []
+    with torch.no_grad():
+        for seed in seeds:
+            result = pipeline(
+                prompt=spec.prompt,
+                image=references,
+                # An empty unconditional prompt still enables CFG when requested.
+                negative_prompt=spec.negative_prompt if spec.guidance > 1 else None,
+                true_cfg_scale=spec.guidance,
+                width=spec.width,
+                height=spec.height,
+                num_inference_steps=spec.steps,
+                generator=torch.Generator(
+                    device=pipeline._execution_device
+                ).manual_seed(seed),
+                output_resolution=QWEN_REFERENCE_RESOLUTION,
+                use_kv_cache=True,
+                output_type="pil",
+            )
+            if len(result.images) != 1 or not isinstance(result.images[0], Image.Image):
+                raise RuntimeError("Qwen pipeline returned an unexpected image batch.")
+            images.append(result.images[0])
+    return images, seeds
 
 
 def draw(workflow: Workflow) -> Image.Image | list[Image.Image]:

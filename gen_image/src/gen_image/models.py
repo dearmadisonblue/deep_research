@@ -5,8 +5,8 @@ from datetime import UTC, datetime
 from typing import Any
 
 from . import adapters
-from .comfy_backend import call_node
 from .config import ModelId
+from .diffusers_backend import load_pipeline
 from .downloads import _ensure_model_files
 from .registry import MODEL_REGISTRY, normalize_model_id
 from .runtime import _STATE, _runtime
@@ -21,16 +21,8 @@ def _release_active_model() -> None:
     rt = _runtime()
     adapters.clear_adapter_cache(files=False, models=True)
     adapters._clear_default_adapters()
-    try:
-        rt.model_management.unload_all_models()
-    except Exception:
-        rt.model_management.free_memory(1e32, rt.model_management.get_torch_device())
     _STATE.model.clear()
     gc.collect()
-    try:
-        rt.model_management.soft_empty_cache()
-    except Exception:
-        pass
     if rt.torch.cuda.is_available():
         rt.torch.cuda.empty_cache()
         rt.torch.cuda.synchronize()
@@ -39,30 +31,12 @@ def _release_active_model() -> None:
 def _load_model_stack(model_id: ModelId) -> dict[str, Any]:
     spec = MODEL_REGISTRY[model_id]
     paths = _ensure_model_files(model_id)
-    components = spec["components"]
-    model = call_node(
-        "UNETLoader",
-        unet_name=components["diffusion"]["filename"],
-        weight_dtype="default",
-    )[0]
-    clip = call_node(
-        "CLIPLoader",
-        clip_name=components["text_encoder"]["filename"],
-        type=spec["clip_type"],
-        device="default",
-    )[0]
-    vae = call_node("VAELoader", vae_name=components["vae"]["filename"])[0]
-    if model_id == "qwen":
-        model = call_node(
-            "QwenImage21Cache", model=model, device="auto", dtype="default"
-        )[0]
+    pipeline = load_pipeline(paths)
     return {
         "model_id": model_id,
         "spec": spec,
         "paths": paths,
-        "model": model,
-        "clip": clip,
-        "vae": vae,
+        "pipeline": pipeline,
         "loaded_at_utc": datetime.now(UTC).isoformat(),
     }
 
@@ -76,6 +50,9 @@ def load_model(name: str, *, force_reload: bool = False) -> ModelId:
     previous_id = current_model()
     if previous_id == model_id and not force_reload:
         return model_id
+    rt = _runtime()
+    if not rt.torch.cuda.is_available() or not rt.torch.cuda.is_bf16_supported():
+        raise RuntimeError("Qwen 2.1 INT8/FP8 requires a CUDA GPU with BF16 support.")
     _ensure_model_files(model_id)
     before = print_runtime_memory(
         f"before model switch ({previous_id or 'none'} -> {model_id})"
@@ -105,7 +82,7 @@ def load_model(name: str, *, force_reload: bool = False) -> ModelId:
             "timestamp_utc": datetime.now(UTC).isoformat(),
             "from": previous_id,
             "to": model_id,
-            "comfy_git_revision": rt.comfy_git_revision,
+            "backend_versions": rt.backend_versions,
             "memory_before": before,
             "memory_after_unload": after_unload,
             "memory_after_load": after_load,

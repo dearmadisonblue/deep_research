@@ -4,22 +4,20 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from gen_image.catalog import Asset
+from gen_image.provenance import _reference_record
+from gen_image.workflows import _DrawSpec, _resolve_workflow
 from PIL import Image
 
 import gen_image
 from gen_image import adapters, generation, runtime
-from gen_image.catalog import Asset
-from gen_image.provenance import _reference_record
-from gen_image.workflows import _DrawSpec, _resolve_workflow
 
 
-@pytest.mark.parametrize("model_id", ["klein", "qwen"])
 def test_pil_reference_resolves_and_reaches_conditioning(
-    model_id: str, monkeypatch: pytest.MonkeyPatch
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(
-        runtime._STATE, "model", {"model_id": model_id, "clip": object(), "vae": object()}
-    )
+    model_id = "qwen"
+    monkeypatch.setattr(runtime._STATE, "model", {"model_id": model_id})
     monkeypatch.setattr(adapters, "DEFAULT_ADAPTERS", ())
     reference = Image.new("RGBA", (400, 200), (255, 0, 0, 128))
 
@@ -31,24 +29,9 @@ def test_pil_reference_resolves_and_reaches_conditioning(
     spec = _resolve_workflow(workflow)
     assert spec.images[0].source is not reference
     assert abs(spec.width - 2 * spec.height) <= 32
-    seen: list[tuple[tuple[int, int, int, int], bool]] = []
-
-    def convert(image: Image.Image, *, preserve_alpha: bool) -> object:
-        seen.append((image.getpixel((0, 0)), preserve_alpha))
-        return object()
-
-    monkeypatch.setattr(generation, "pil_to_comfy_image", convert)
-    monkeypatch.setattr(
-        generation, "scale_comfy_image_to_total_pixels", lambda tensor: tensor
-    )
-    monkeypatch.setattr(
-        generation, "call_node", lambda name, **kwargs: (object(), object(), object())
-    )
-    if model_id == "klein":
-        generation._prepare_klein_conditioning(spec)
-    else:
-        generation._prepare_qwen_conditioning(spec)
-    assert seen == [((255, 0, 0, 128), model_id == "qwen")]
+    prepared = generation._reference_image(spec.images[0])
+    assert prepared.mode == "RGBA"
+    assert prepared.getpixel((0, 0)) == (255, 0, 0, 128)
 
     record = _reference_record(spec.images[0], 1, model_id)
     assert record["id"] is None
@@ -62,21 +45,13 @@ def test_asset_reference_still_opens_file(
     path = tmp_path / "reference.png"
     Image.new("RGB", (10, 10), "red").save(path)
     asset = Asset("reference", path, "image")
-    seen: list[tuple[int, int, int]] = []
-
-    def convert(image: Image.Image, *, preserve_alpha: bool) -> object:
-        seen.append(image.getpixel((0, 0)))
-        return object()
-
-    monkeypatch.setattr(generation, "pil_to_comfy_image", convert)
-    generation._reference_tensor(
-        generation.ImageUse(source=asset), preserve_alpha=False
-    )
-    assert seen == [(255, 0, 0)]
+    prepared = generation._reference_image(generation.ImageUse(source=asset))
+    assert prepared.getpixel((0, 0)) == (255, 0, 0, 255)
+    assert prepared.mode == "RGBA"
 
 
 def test_use_image_rejects_batch(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(runtime._STATE, "model", {"model_id": "klein"})
+    monkeypatch.setattr(runtime._STATE, "model", {"model_id": "qwen"})
 
     def workflow() -> str:
         gen_image.use_image([Image.new("RGB", (1, 1))])  # type: ignore[arg-type]
@@ -89,7 +64,7 @@ def test_use_image_rejects_batch(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_draw_result_can_be_used_without_saving(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    monkeypatch.setattr(runtime._STATE, "model", {"model_id": "klein"})
+    monkeypatch.setattr(runtime._STATE, "model", {"model_id": "qwen"})
     monkeypatch.setattr(adapters, "DEFAULT_ADAPTERS", ())
     fake_runtime = SimpleNamespace(
         paths=SimpleNamespace(

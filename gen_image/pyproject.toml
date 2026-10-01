@@ -4,12 +4,20 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "gen-image"
-version = "0.1.0"
-description = "Direct-ComfyUI image generation with Python workflows"
+version = "0.2.0.dev0"
+description = "Diffusers Qwen 2.1 image generation with Python workflows"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-  "huggingface-hub>=0.34",
+  "huggingface-hub>=1.32,<2",
+  "torch==2.12.1",
+  "torchvision==0.27.1",
+  "torchao==0.18.0",
+  "transformers==5.18.0",
+  "diffusers @ git+https://github.com/huggingface/diffusers.git@578c9b2c6636ab2424a0e56186268b83623656b2",
+  "accelerate==1.15.0",
+  "peft==0.21.2",
+  "safetensors>=0.6",
   "numpy>=1.26",
   "Pillow>=10",
   "psutil>=5.9",
@@ -25,3 +33,6 @@ where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 
+
+[tool.setuptools.package-data]
+gen_image = ["pipeline_files.json"]

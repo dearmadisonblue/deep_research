@@ -4,12 +4,13 @@ import hashlib
 import json
 import os
 import shutil
+from importlib.resources import files
 from pathlib import Path
 
 from huggingface_hub import hf_hub_download
 from huggingface_hub.errors import GatedRepoError, RepositoryNotFoundError
 
-from .registry import MODEL_REGISTRY, normalize_model_id
+from .registry import BASE_MODEL_ID, BASE_REVISION, MODEL_REGISTRY, normalize_model_id
 from .runtime import _STATE, _runtime
 
 
@@ -72,6 +73,7 @@ def _write_verified_marker(
                 "filename": filename,
                 "size": expected_size,
                 "sha256": expected_sha256,
+                "mtime_ns": path.stat().st_mtime_ns,
             },
             indent=2,
         )
@@ -100,6 +102,7 @@ def _marker_matches(
         "filename": filename,
         "size": expected_size,
         "sha256": expected_sha256,
+        "mtime_ns": path.stat().st_mtime_ns,
     }
 
 
@@ -121,13 +124,14 @@ def _hf_error_requires_auth(exc: Exception) -> bool:
     ) in (401, 403)
 
 
-def _hf_download(repo_id: str, filename: str) -> Path:
+def _hf_download(repo_id: str, filename: str, revision: str) -> Path:
     rt = _runtime()
     try:
         return Path(
             hf_hub_download(
                 repo_id=repo_id,
                 filename=filename,
+                revision=revision,
                 cache_dir=str(rt.paths.local_hf_hub_dir),
                 force_download=True,
                 token=False,
@@ -146,6 +150,7 @@ def _hf_download(repo_id: str, filename: str) -> Path:
             hf_hub_download(
                 repo_id=repo_id,
                 filename=filename,
+                revision=revision,
                 cache_dir=str(rt.paths.local_hf_hub_dir),
                 force_download=True,
                 token=token,
@@ -154,12 +159,19 @@ def _hf_download(repo_id: str, filename: str) -> Path:
 
 
 def _persistent_download(
-    *, repo_id: str, filename: str, expected_size: int, expected_sha256: str
+    *,
+    repo_id: str,
+    filename: str,
+    revision: str,
+    expected_size: int,
+    expected_sha256: str,
 ) -> Path:
     rt = _runtime()
-    target = rt.paths.hf_files_dir / repo_id.replace("/", "--") / Path(filename)
+    target = (
+        rt.paths.hf_files_dir / repo_id.replace("/", "--") / revision / Path(filename)
+    )
     if target.exists():
-        ok, reason = _looks_like_safetensors(target, expected_size)
+        ok, reason = _validate_file(target, expected_size)
         if ok and _marker_matches(
             target,
             repo_id=repo_id,
@@ -182,8 +194,8 @@ def _persistent_download(
         target.unlink(missing_ok=True)
         _verified_marker(target).unlink(missing_ok=True)
 
-    downloaded = _hf_download(repo_id, filename)
-    ok, reason = _looks_like_safetensors(downloaded, expected_size)
+    downloaded = _hf_download(repo_id, filename, revision)
+    ok, reason = _validate_file(downloaded, expected_size)
     if not ok:
         raise RuntimeError(f"Downloaded file is invalid: {reason}")
     actual = _sha256(downloaded)
@@ -207,47 +219,40 @@ def _persistent_download(
     return target
 
 
-def _component_target_dir(category: str) -> Path:
-    paths = _runtime().paths
-    return {
-        "diffusion_models": paths.diffusion_models_dir,
-        "text_encoders": paths.text_encoders_dir,
-        "vae": paths.vae_dir,
-    }[category]
-
-
-def _expose_to_comfy(cached_path: Path, target_dir: Path, filename: str) -> Path:
-    target_dir.mkdir(parents=True, exist_ok=True)
-    target = target_dir / filename
-    if target.is_symlink() or target.exists():
-        try:
-            if target.resolve() == cached_path.resolve():
-                return target
-        except Exception:
-            pass
-        target.unlink()
-    try:
-        target.symlink_to(cached_path)
-    except OSError:
-        shutil.copy2(cached_path, target)
-    return target
+def _validate_file(path: Path, expected_size: int) -> tuple[bool, str]:
+    if path.suffix == ".safetensors":
+        return _looks_like_safetensors(path, expected_size)
+    if not path.is_file() or path.stat().st_size != expected_size:
+        return False, "missing file or wrong size"
+    return True, "ok"
 
 
 def _ensure_model_files(name: str) -> dict[str, Path]:
     model_id = normalize_model_id(name)
-    existing = _STATE.model_file_paths.get(model_id)
-    if existing and all(path.exists() for path in existing.values()):
-        return existing
     paths: dict[str, Path] = {}
     for component_name, component in MODEL_REGISTRY[model_id]["components"].items():
-        cached = _persistent_download(
+        paths[component_name] = _persistent_download(
             repo_id=component["repo_id"],
             filename=component["repo_filename"],
+            revision=component["revision"],
             expected_size=component["size"],
             expected_sha256=component["sha256"],
         )
-        paths[component_name] = _expose_to_comfy(
-            cached, _component_target_dir(component["category"]), component["filename"]
+    # Only named configuration/tokenizer files are fetched from Qwen. Never fetch
+    # its dense transformer or text encoder, including their shard indexes.
+    manifest = json.loads(
+        files("gen_image").joinpath("pipeline_files.json").read_text()
+    )
+    for item in manifest:
+        _persistent_download(
+            repo_id=BASE_MODEL_ID,
+            revision=BASE_REVISION,
+            filename=item["filename"],
+            expected_size=item["size"],
+            expected_sha256=item["sha256"],
         )
+    paths["pipeline_config"] = (
+        _runtime().paths.hf_files_dir / BASE_MODEL_ID.replace("/", "--") / BASE_REVISION
+    )
     _STATE.model_file_paths[model_id] = paths
     return paths

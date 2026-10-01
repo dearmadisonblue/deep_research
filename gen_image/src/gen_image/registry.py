@@ -6,10 +6,11 @@ from typing import Any
 
 from .config import ModelId
 
+BASE_MODEL_ID = "Qwen/Qwen-Image-2.1"
+BASE_REVISION = "d26bb61231c349cf6b7896fa83353113880e1ba3"
+DIFFUSERS_REVISION = "578c9b2c6636ab2424a0e56186268b83623656b2"
+
 MODEL_ALIASES = {
-    "klein": "klein",
-    "flux": "klein",
-    "flux2-klein": "klein",
     "qwen": "qwen",
     "qwen-image": "qwen",
     "qwen_image_2_1": "qwen",
@@ -17,53 +18,9 @@ MODEL_ALIASES = {
 }
 
 MODEL_REGISTRY: dict[str, dict[str, Any]] = {
-    "klein": {
-        "display_name": "FLUX.2 Klein 9B FP8",
-        "clip_type": "flux2",
-        "quantization": "FP8 diffusion / FP8-mixed text encoder",
-        "license": "Black Forest Labs model terms",
-        "size_multiple": 16,
-        "max_references": None,
-        "defaults": {
-            "width": 1024,
-            "height": 1024,
-            "steps": 4,
-            "guidance": 1.0,
-            "sampler": "euler",
-            "negative_prompt": "",
-            "batch": 1,
-        },
-        "components": {
-            "diffusion": {
-                "category": "diffusion_models",
-                "filename": "flux-2-klein-9b-fp8.safetensors",
-                "repo_id": "black-forest-labs/FLUX.2-klein-9b-fp8",
-                "repo_filename": "flux-2-klein-9b-fp8.safetensors",
-                "size": 9_433_061_528,
-                "sha256": "865ba09f5b4c3cbd3468a4bd3acb9fcb2f8740c54317482f0bcd4ed1d3655cee",
-            },
-            "text_encoder": {
-                "category": "text_encoders",
-                "filename": "qwen_3_8b_fp8mixed.safetensors",
-                "repo_id": "Comfy-Org/vae-text-encorder-for-flux-klein-9b",
-                "repo_filename": "split_files/text_encoders/qwen_3_8b_fp8mixed.safetensors",
-                "size": 8_664_848_742,
-                "sha256": "abad16806e0cbabc54e0325d6565847443fe396d5f0be38bb3cd3fe75a1201d6",
-            },
-            "vae": {
-                "category": "vae",
-                "filename": "full_encoder_small_decoder.safetensors",
-                "repo_id": "black-forest-labs/FLUX.2-small-decoder",
-                "repo_filename": "full_encoder_small_decoder.safetensors",
-                "size": 249_519_092,
-                "sha256": "ea4273f02d1fafbf8e1d1c2cf6018ed8748652eb0bf34f2dd91171f16f15ab62",
-            },
-        },
-    },
     "qwen": {
-        "display_name": "Qwen Image 2.1 INT8 ConvRot",
-        "clip_type": "qwen_image",
-        "quantization": "INT8 ConvRot diffusion / INT8 ConvRot text encoder",
+        "display_name": "Qwen Image 2.1 Unsloth INT8 / FP8",
+        "quantization": "pre-quantized TorchAO INT8 transformer / FP8-storage text encoder (BF16 compute)",
         "license": "Qwen Research License (non-commercial without a separate license)",
         "size_multiple": 32,
         "max_references": 10,
@@ -79,65 +36,37 @@ MODEL_REGISTRY: dict[str, dict[str, Any]] = {
         },
         "components": {
             "diffusion": {
-                "category": "diffusion_models",
-                "filename": "qwen_image_2.1_int8_convrot.safetensors",
-                "repo_id": "Comfy-Org/Qwen-Image-2.1",
-                "repo_filename": "diffusion_models/qwen_image_2.1_int8_convrot.safetensors",
-                "size": 7_256_783_064,
-                "sha256": "cb74113cb03faecd79611b01fd7fd642f0aa60d6f0b95086abee214d75eaa57d",
+                "filename": "Qwen-Image-2.1-INT8.safetensors",
+                "repo_id": "unsloth/Qwen-Image-2.1-FP8",
+                "revision": "d67caebb412f98c968f9be41b3a8cea80b3e039a",
+                "repo_filename": "Qwen-Image-2.1-INT8.safetensors",
+                "size": 7258361376,
+                "sha256": "51ed9fe73c8780e43d91c2ff2f36bf609369a8af2761d617b9a10c83d6ea3c60",
             },
             "text_encoder": {
-                "category": "text_encoders",
-                "filename": "qwen3vl_8b_int8_convrot.safetensors",
-                "repo_id": "Comfy-Org/Qwen-Image-2.1",
-                "repo_filename": "text_encoders/qwen3vl_8b_int8_convrot.safetensors",
-                "size": 9_350_798_360,
-                "sha256": "8bfd0f6e12abf2d2d697ecc888e5e90b0d6741d6708f05799f53afa560452e8f",
+                "filename": "Qwen-Image-2.1-text_encoder-FP8.safetensors",
+                "repo_id": "unsloth/Qwen-Image-2.1-FP8",
+                "revision": "d67caebb412f98c968f9be41b3a8cea80b3e039a",
+                "repo_filename": "Qwen-Image-2.1-text_encoder-FP8.safetensors",
+                "size": 9394530592,
+                "sha256": "0a1e217ea5a327c77cf4c58ee2ec4b15dabdd55cc4ffa6d999085865e70db3df",
             },
             "vae": {
-                "category": "vae",
                 "filename": "qwen_image_2.1_vae_bf16.safetensors",
-                "repo_id": "Comfy-Org/Qwen-Image-2.1",
+                "repo_id": "unsloth/Qwen-Image-2.1-FP8",
+                "revision": "d67caebb412f98c968f9be41b3a8cea80b3e039a",
                 "repo_filename": "vae/qwen_image_2.1_vae_bf16.safetensors",
-                "size": 675_509_688,
-                "sha256": "bb21f7473051e1ac368515dd3f2e15cd44d7a11748ee8823e1ddca3e4876b7c9",
+                "size": 675508656,
+                "sha256": "71879ffd5321e6d10c3c87513e2b474b1252efa7f3dec2969214a9bf06a6dd5c",
             },
         },
     },
 }
 
-KLEIN_REQUIRED_NODES = {
-    "UNETLoader",
-    "CLIPLoader",
-    "VAELoader",
-    "CLIPTextEncode",
-    "ConditioningZeroOut",
-    "RandomNoise",
-    "CFGGuider",
-    "KSamplerSelect",
-    "Flux2Scheduler",
-    "EmptyFlux2LatentImage",
-    "SamplerCustomAdvanced",
-    "VAEEncode",
-    "VAEDecode",
-    "ReferenceLatent",
-}
-QWEN_REQUIRED_NODES = {
-    "UNETLoader",
-    "CLIPLoader",
-    "VAELoader",
-    "TextEncodeQwenImage21",
-    "QwenImage21Cache",
-    "EmptyLatentImage",
-    "KSampler",
-    "VAEDecode",
-}
-REQUIRED_NODES = sorted(KLEIN_REQUIRED_NODES | QWEN_REQUIRED_NODES)
-
 
 def available_models() -> tuple[ModelId, ...]:
     """Return the supported model identifiers."""
-    return ("klein", "qwen")
+    return ("qwen",)
 
 
 def normalize_model_id(name: str) -> ModelId:

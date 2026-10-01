@@ -15,7 +15,7 @@ from PIL import Image, ImageOps
 from . import adapters
 from .adapters import AdapterUse
 from .catalog import Asset, Prompt, get_asset, sha256_text
-from .config import QWEN_REFERENCE_RESOLUTION, REFERENCE_MEGAPIXELS, ModelId
+from .config import QWEN_REFERENCE_RESOLUTION, ModelId
 from .registry import MODEL_REGISTRY
 from .runtime import _STATE
 
@@ -61,7 +61,9 @@ def _context() -> _WorkflowContext:
     return context
 
 
-def use_image(asset: Asset | str | Image.Image, *, strength: float | None = None) -> None:
+def use_image(
+    asset: Asset | str | Image.Image, *, strength: float | None = None
+) -> None:
     """Add an ordered image reference to the current workflow."""
     if isinstance(asset, str):
         asset = get_asset(asset)
@@ -208,19 +210,14 @@ def _resolve_workflow(workflow: Workflow) -> _DrawSpec:
         resolved["width"], resolved["height"] = context.size
     elif context.images and not size_explicit:
         first_source = context.images[0].source
-        reference = first_source.path if isinstance(first_source, Asset) else first_source
-        if model_id == "qwen":
-            resolved["width"], resolved["height"] = reference_output_size(
-                reference,
-                total_pixels=QWEN_REFERENCE_RESOLUTION**2,
-                multiple=32,
-            )
-        else:
-            resolved["width"], resolved["height"] = reference_output_size(
-                reference,
-                total_pixels=REFERENCE_MEGAPIXELS * 1024 * 1024,
-                multiple=16,
-            )
+        reference = (
+            first_source.path if isinstance(first_source, Asset) else first_source
+        )
+        resolved["width"], resolved["height"] = reference_output_size(
+            reference,
+            total_pixels=QWEN_REFERENCE_RESOLUTION**2,
+            multiple=32,
+        )
     for name in ("steps", "guidance", "sampler", "batch"):
         value = getattr(context, name)
         if value is not None:

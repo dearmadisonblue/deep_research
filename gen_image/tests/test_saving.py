@@ -4,11 +4,11 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from gen_image.workflows import _DrawSpec
 from PIL import Image
 
 import gen_image
 from gen_image import adapters, generation, runtime
-from gen_image.workflows import _DrawSpec
 
 
 def test_saving_state_api() -> None:
@@ -28,7 +28,7 @@ def test_saving_state_api() -> None:
 def test_draw_uses_saving_snapshot_and_logs_independently(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    monkeypatch.setattr(runtime._STATE, "model", {"model_id": "klein"})
+    monkeypatch.setattr(runtime._STATE, "model", {"model_id": "qwen"})
     monkeypatch.setattr(adapters, "DEFAULT_ADAPTERS", ())
     fake_runtime = SimpleNamespace(
         paths=SimpleNamespace(

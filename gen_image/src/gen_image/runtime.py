@@ -25,26 +25,14 @@ class RuntimePaths:
     local_hf_dir: Path
     local_hf_hub_dir: Path
     local_hf_xet_dir: Path
-    comfy_dir: Path
-    comfy_models_dir: Path
-    diffusion_models_dir: Path
-    text_encoders_dir: Path
-    vae_dir: Path
-    comfy_adapters_dir: Path
 
 
 @dataclass
 class _Runtime:
     paths: RuntimePaths
     secret_provider: SecretProvider | None
-    comfy_git_revision: str
     torch: Any
-    model_management: Any
-    comfy_utils: Any
-    comfy_sd: Any
-    folder_paths: Any
-    args: Any
-    node_class_mappings: dict[str, Any]
+    backend_versions: dict[str, str]
 
 
 _RUNTIME: _Runtime | None = None
@@ -54,8 +42,6 @@ def _build_paths(root_dir: str | Path, temp_dir: str | Path) -> RuntimePaths:
     root = Path(root_dir).expanduser().resolve()
     temp = Path(temp_dir).expanduser().resolve()
     models = root / "models"
-    comfy = temp / "ComfyUI"
-    comfy_models = comfy / "models"
     local_hf = temp / "huggingface"
     return RuntimePaths(
         root_dir=root,
@@ -72,12 +58,6 @@ def _build_paths(root_dir: str | Path, temp_dir: str | Path) -> RuntimePaths:
         local_hf_dir=local_hf,
         local_hf_hub_dir=local_hf / "hub",
         local_hf_xet_dir=local_hf / "xet",
-        comfy_dir=comfy,
-        comfy_models_dir=comfy_models,
-        diffusion_models_dir=comfy_models / "diffusion_models",
-        text_encoders_dir=comfy_models / "text_encoders",
-        vae_dir=comfy_models / "vae",
-        comfy_adapters_dir=comfy_models / "loras",
     )
 
 
@@ -134,7 +114,7 @@ async def init(
     *,
     secret_provider: SecretProvider | None = None,
 ) -> Mapping[str, Any]:
-    """Initialize paths, caches, ComfyUI, native nodes, and file indexes."""
+    """Initialize paths, caches, Diffusers dependencies, and file indexes."""
     global _RUNTIME
 
     paths = _build_paths(root_dir, temp_dir)
@@ -159,7 +139,6 @@ async def init(
         paths.videos_dir,
         paths.run_logs_dir,
         paths.hf_files_dir,
-        paths.adapters_dir / "klein",
         paths.adapters_dir / "qwen",
         paths.local_hf_hub_dir,
         paths.local_hf_xet_dir,
@@ -172,7 +151,7 @@ async def init(
     os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
     os.environ["DO_NOT_TRACK"] = "1"
 
-    from .comfy_backend import initialize_backend
+    from .diffusers_backend import initialize_backend
 
     backend = await initialize_backend(paths)
     _RUNTIME = _Runtime(paths=paths, secret_provider=secret_provider, **backend)
@@ -183,6 +162,6 @@ async def init(
 
     refresh_library()
     refresh_adapters()
-    print("ComfyUI git revision:", _RUNTIME.comfy_git_revision)
+    print("Diffusers backend:", _RUNTIME.backend_versions)
     print("gen_image initialized:", paths.root_dir)
     return status()

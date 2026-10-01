@@ -11,7 +11,7 @@ from .adapters import ADAPTER_INDEX
 from .catalog import ASSET_INDEX, PROMPT_INDEX
 from .config import NYC_TIMEZONE
 from .models import current_model, load_model
-from .registry import REQUIRED_NODES, available_models
+from .registry import available_models
 from .runtime import _STATE, _runtime, _runtime_or_none
 
 
@@ -80,7 +80,8 @@ def status() -> Mapping[str, Any]:
         "initialized": True,
         "root_dir": str(rt.paths.root_dir),
         "temp_dir": str(rt.paths.temp_dir),
-        "comfy_git_revision": rt.comfy_git_revision,
+        "backend": "diffusers",
+        "backend_versions": rt.backend_versions,
         "active_model": current_model(),
         "prompt_count": len(PROMPT_INDEX),
         "asset_count": len(ASSET_INDEX),
@@ -89,22 +90,20 @@ def status() -> Mapping[str, Any]:
 
 
 def doctor(*, require_model: bool = False) -> Mapping[str, Any]:
-    """Validate directories, ComfyUI nodes, CUDA availability, and model state."""
+    """Validate directories, Diffusers dependencies, CUDA availability, and model state."""
     rt = _runtime()
     checks = {
         "root_directory_exists": rt.paths.root_dir.is_dir(),
         "temp_directory_exists": rt.paths.temp_dir.is_dir(),
         "models_directory_exists": rt.paths.models_dir.is_dir(),
-        "required_nodes_registered": not [
-            name for name in REQUIRED_NODES if name not in rt.node_class_mappings
-        ],
         "cuda_available": bool(rt.torch.cuda.is_available()),
-        "comfy_revision_recorded": bool(rt.comfy_git_revision),
+        "bf16_supported": bool(
+            rt.torch.cuda.is_available() and rt.torch.cuda.is_bf16_supported()
+        ),
+        "backend_versions_recorded": bool(rt.backend_versions),
     }
     if require_model:
-        checks["model_loaded"] = not (
-            {"model_id", "model", "clip", "vae"} - _STATE.model.keys()
-        )
+        checks["model_loaded"] = not ({"model_id", "pipeline"} - _STATE.model.keys())
     failures = [name for name, passed in checks.items() if not passed]
     report = {
         "status": "ok" if not failures else "failed",

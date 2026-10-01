@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import json
 from pathlib import Path
 
 import gen_image
@@ -12,7 +13,7 @@ EXPECTED_MODULES = {
     "__init__.py",
     "adapters.py",
     "catalog.py",
-    "comfy_backend.py",
+    "diffusers_backend.py",
     "config.py",
     "diagnostics.py",
     "downloads.py",
@@ -40,3 +41,17 @@ def test_public_api_exports_session_accessors() -> None:
     assert gen_image.set_saving is not None
     assert gen_image.is_saving is not None
     assert not hasattr(gen_image, "use_save")
+
+
+def test_public_api_names_and_function_signatures_are_preserved() -> None:
+    baseline = json.loads((PACKAGE_ROOT / "tests/fixtures/public_api.json").read_text())
+    assert gen_image.__all__ == baseline["exports"]
+    signatures = {}
+    for path in SOURCE.glob("*.py"):
+        for node in ast.parse(path.read_text()).body:
+            if (
+                isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and node.name in baseline["signatures"]
+            ):
+                signatures[node.name] = ast.dump(node.args, include_attributes=False)
+    assert signatures == baseline["signatures"]

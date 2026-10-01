@@ -1,4 +1,4 @@
-"""Direct-ComfyUI image generation with Python workflows."""
+"""Diffusers Qwen 2.1 image generation with Python workflows."""
 
 from .adapters import (
     clear_adapter_cache,
@@ -83,4 +83,4 @@ __all__ = [
     "use_steps",
 ]
 
-__version__ = "0.1.0"
+__version__ = "0.2.0.dev0"

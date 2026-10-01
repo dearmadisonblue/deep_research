@@ -1,21 +1,26 @@
 # gen_image
 
-`gen_image` is a Python image-generation package built around two tested model
-configurations. It manages persistent model files, ComfyUI initialization,
-model switching, prompt and asset indexing, workflow execution, image saving,
-and provenance logging.
-
-The package uses ComfyUI internals directly. It does not launch the ComfyUI web
-interface or API server. Instead, it configures ComfyUI as an in-process
-backend, registers the required native nodes, and invokes those nodes from
-Python. This provides a compact API but couples the package more closely to
-ComfyUI's internal APIs than a conventional HTTP client.
+This experimental branch replaces the backend with Hugging Face Diffusers and
+supports **Qwen Image 2.1 only**. The public functions, their signatures, Python
+workflows, PIL return values, asset/prompt indexing, ordered references, batch
+seeds, saving controls, and logging controls remain available.
 
 ## Installation
 
+Use a fresh Python 3.11+ environment on a CUDA machine with BF16 support
+(Ampere or newer). Install a CUDA build of PyTorch 2.12.1 and the matching
+Torchvision build using the [official PyTorch instructions](https://pytorch.org/get-started/locally/),
+then install this branch:
+
 ```bash
-pip install "git+https://github.com/dearmadisonblue/deep_research.git#subdirectory=gen_image"
+pip install "git+https://github.com/dearmadisonblue/deep_research.git@experimental/qwen21-diffusers#subdirectory=gen_image"
 ```
+
+Diffusers is pinned to a source commit that implements `QwenImage21Pipeline`.
+Torch, TorchAO, Transformers, Accelerate, and PEFT are pinned in `pyproject.toml`.
+The source pin needs Git during installation. `init()` never installs packages
+or clones a backend at runtime. Restart an existing notebook kernel after
+installation so it uses the installed versions.
 
 ## Source layout
 
@@ -24,7 +29,7 @@ divided by responsibility:
 
 - `config` and `registry` define shared types, constants, and supported models.
 - `runtime` owns initialized backend and session state.
-- `comfy_backend` contains the direct ComfyUI integration.
+- `diffusers_backend` assembles the pipeline from pre-quantized components.
 - `downloads`, `models`, and `adapters` manage model resources and activation.
 - `catalog` indexes prompts and assets.
 - `workflows` records and resolves declarative workflow effects.
@@ -49,16 +54,13 @@ root/
     ├── huggingface/
     │   └── files/
     └── adapters/
-        ├── klein/
         └── qwen/
 ```
 
-A second, disposable directory contains the ComfyUI checkout and Hugging
-Face's native download cache:
+A second, disposable directory contains Hugging Face's native download cache:
 
 ```text
 temp/
-├── ComfyUI/
 └── huggingface/
     ├── hub/
     └── xet/
@@ -88,7 +90,7 @@ async def main():
         root_dir=Path("/data/image-generation"),
         temp_dir=Path("/tmp/gen-image"),
     )
-    gen_image.load_model("klein")
+    gen_image.load_model("qwen")
     image = gen_image.draw(portrait_workflow)
     image.show()
 
@@ -101,29 +103,81 @@ asyncio.run(main())
 files, and then loads the selected model. `draw()` never displays an image; it
 returns a PIL image, leaving presentation to the caller.
 
-## Model configurations
+## Qwen 2.1 checkpoint configuration
 
-### `klein`
+All model weights come from [Unsloth's Qwen-Image-2.1-FP8 repository](https://huggingface.co/unsloth/Qwen-Image-2.1-FP8):
 
-- `flux-2-klein-9b-fp8.safetensors`
-- `qwen_3_8b_fp8mixed.safetensors`
-- `full_encoder_small_decoder.safetensors`
-- Default: 1024 × 1024, 4 steps, guidance 1.0, Euler
+| Component | Published file | Loading / compute |
+| --- | --- | --- |
+| Transformer | `Qwen-Image-2.1-INT8.safetensors` | Reconstruct saved TorchAO `Int8Tensor` weights and scales |
+| Text encoder | `Qwen-Image-2.1-text_encoder-FP8.safetensors` | Keep FP8 storage; upcast each saved FP8 layer to BF16 during forward |
+| VAE | `vae/qwen_image_2.1_vae_bf16.safetensors` | BF16 |
 
-This stack uses ComfyUI's native FLUX.2 conditioning, reference-latent,
-scheduler, sampler, and VAE nodes.
+The Unsloth repository contains standalone components, not a complete Diffusers
+pipeline directory. The loader constructs model skeletons on meta, assigns
+weights strictly, and assembles `QwenImage21Pipeline` with the scheduler and
+processor configuration from [Qwen/Qwen-Image-2.1](https://huggingface.co/Qwen/Qwen-Image-2.1).
+Only configuration and tokenizer files are downloaded from Qwen; its dense
+transformer and text encoder are never downloaded. Every downloaded file has a
+pinned repository revision, size, and SHA-256. Invalid or incompatible
+checkpoints fail explicitly, with no runtime weight-quantization fallback.
 
-### `qwen`
+Unsloth's INT8 artifact uses dynamic **activation** quantization in its forward
+path. Its weights are already quantized. The FP8 encoder uses BF16 arithmetic,
+not FP8 matrix multiplications. These checkpoints differ from the previous
+INT8 ConvRot weights, so identical seeds do not imply identical images.
 
-- `qwen_image_2.1_int8_convrot.safetensors`
-- `qwen3vl_8b_int8_convrot.safetensors`
-- `qwen_image_2.1_vae_bf16.safetensors`
-- Default: 1024 × 1024, 25 steps, guidance 1.0, Euler/simple
-- Up to ten ordered references
+Defaults remain 1024 × 1024, 25 steps, guidance 1.0, and `use_sampler("euler")`.
+Sampling uses `FlowMatchEulerDiscreteScheduler`; other sampler names raise a
+clear error. `available_models()` returns `("qwen",)` and Klein aliases are
+unsupported on this branch. Qwen aliases such as `"qwen-image-2.1"` still work.
 
-References are identified as `<image1>` through `<image10>`. For edits, the
-first reference supplies the default canvas. RGBA output is supported when
+Up to ten ordered references are supported, with `<image1>` through `<image10>`
+in the prompt. The first reference supplies the default canvas; `use_size()`
+overrides it. Reference alpha is preserved for the VAE and composited over
+white for the text encoder by the Qwen pipeline. RGBA output is supported when
 transparency is requested explicitly.
+
+## Memory and first GPU trial
+
+By default all three components stay on the GPU. The saved weights total about
+16.1 GiB, before activations, prompt embeddings, and KV caches. Leave additional
+VRAM and host RAM available. The loader avoids dense weight initialization,
+and VAE tiling is enabled to reduce decoding peaks.
+
+To keep the transformer resident while moving the whole text encoder to the
+GPU only during prompt encoding, set this before `load_model()`:
+
+```python
+import os
+
+os.environ["GEN_IMAGE_TEXT_ENCODER_OFFLOAD"] = "1"
+```
+
+This reduces VRAM during denoising, but temporarily needs space for the encoder
+while encoding each prompt, and transfers about 9 GB each time. The default is
+`"0"`. Change it before loading or use `load_model("qwen", force_reload=True)`.
+The loader never calls generic pipeline CPU offloading or casts the INT8
+transformer to another dtype.
+
+A minimal trial needs no assets or adapters:
+
+```python
+await gen_image.init("/data/image-generation", "/tmp/gen-image")
+gen_image.load_model("qwen")
+gen_image.doctor(require_model=True)
+gen_image.set_random_seed(42)
+image = gen_image.draw(lambda: "A red ceramic teapot on a wooden table")
+display(image)  # In a notebook; image.show() in a desktop Python session.
+```
+
+Then try an edit with `use_image(image)`, guidance/negative prompts, your Qwen
+2.1 adapters, and batching. The CPU tests cover checkpoint reconstruction,
+architecture compatibility, FP8 layer hooks, real PEFT adapter switching,
+workflow arguments, and existing API behavior. A separate miniature random-weight
+CPU trial also completed text-to-image and reference-image editing with RGBA
+output, CFG, and KV caching. **Full-size CUDA inference and
+image quality have not been tested in the development workspace.**
 
 ## Workflows and effects
 
@@ -133,7 +187,7 @@ A workflow is a zero-argument Python function that returns a prompt:
 Workflow = Callable[[], str | Prompt]
 ```
 
-It is not a ComfyUI node graph or serialized ComfyUI workflow. Calls such as
+Calls such as
 `use_image()` and `use_adapter()` follow a React-inspired effect pattern: they
 record declarations in a context local to the current `draw()` call rather
 than performing generation immediately.
@@ -142,7 +196,7 @@ than performing generation immediately.
 def portrait_workflow():
     gen_image.use_image("subject/front")
     gen_image.use_size(1024, 1280)
-    gen_image.use_steps(6)
+    gen_image.use_steps(25)
     return "A full-length studio portrait."
 ```
 
@@ -159,7 +213,7 @@ a render or reconciliation cycle.
 ## Core types
 
 ```python
-ModelId = Literal["klein", "qwen"]
+ModelId = Literal["qwen"]
 AssetKind = Literal["image", "video"]
 SecretProvider = Callable[[str], str | None]
 Workflow = Callable[[], str | Prompt]
@@ -198,7 +252,7 @@ async def init(
     *,
     secret_provider: SecretProvider | None = None,
 ) -> Mapping[str, Any]:
-    """Initialize paths, caches, ComfyUI, native nodes, and file indexes."""
+    """Initialize paths, caches, Diffusers dependencies, and file indexes."""
 ```
 
 `root_dir` contains persistent data. `temp_dir` contains disposable backend
@@ -214,7 +268,7 @@ def status() -> Mapping[str, Any]:
 
 ```python
 def doctor(*, require_model: bool = False) -> Mapping[str, Any]:
-    """Validate directories, ComfyUI nodes, CUDA availability, and model state."""
+    """Validate directories, Diffusers dependencies, CUDA availability, and model state."""
 ```
 
 `doctor()` returns a structured health report and raises if a required check
@@ -318,8 +372,12 @@ not have sidecar metadata.
 
 ## Adapter API
 
-Adapter files are discovered beneath `root/models/adapters`. The model-specific
-subdirectory determines compatibility.
+Adapter files are discovered beneath `root/models/adapters/qwen`. Use adapters
+compatible with Diffusers' Qwen 2.1 LoRA loader. Existing files stay in the same
+location, but a format accepted by the previous backend may require conversion.
+Incompatible files raise an error. Adapters are loaded as separate PEFT branches
+and are never fused or requantized into the INT8 transformer. At most two adapter
+selections are retained; clearing the model cache unloads their PEFT weights.
 
 ```python
 def refresh_adapters() -> None:
@@ -346,10 +404,8 @@ def set_default_adapters(
 Passing `None` or an empty sequence restores the bare active model.
 
 ```python
-def clear_adapter_cache(
-    *, files: bool = True, models: bool = True
-) -> None:
-    """Clear cached adapter tensors and/or patched model variants."""
+def clear_adapter_cache(*, files: bool = True, models: bool = True) -> None:
+    """Clear cached adapter tensors and/or loaded PEFT adapters."""
 ```
 
 This does not delete persistent files.
@@ -364,29 +420,39 @@ def show_adapter_cache() -> None:
 These functions must be called while `draw()` is executing a workflow.
 
 ```python
-def use_image(asset: Asset | str | Image.Image, *, strength: float | None = None) -> None:
+def use_image(
+    asset: Asset | str | Image.Image, *, strength: float | None = None
+) -> None:
     """Add an ordered image reference to the current workflow."""
+
 
 def use_adapter(name: str, strength: float = 1.0) -> None:
     """Apply an indexed adapter to the current workflow."""
 
+
 def use_size(width: int, height: int) -> None:
     """Override the model's default output dimensions."""
+
 
 def use_steps(steps: int) -> None:
     """Override the model's default sampling-step count."""
 
+
 def use_guidance(guidance: float) -> None:
     """Override the model's default guidance value."""
+
 
 def use_sampler(name: str) -> None:
     """Select the sampler for the current workflow."""
 
+
 def use_negative_prompt(prompt: str | Prompt) -> None:
     """Set the negative prompt for the current workflow."""
 
+
 def use_batch(batch: int) -> None:
     """Set the number of images generated by the current draw."""
+
 
 def use_output_name(name: str) -> None:
     """Set the filename prefix used for saved images."""
@@ -413,6 +479,7 @@ NumPy, or Torch random-number generators.
 def set_saving(enabled: bool) -> None:
     """Enable or disable saving generated images to files."""
 
+
 def is_saving() -> bool:
     """Return whether generated images are saved to files."""
 ```
@@ -427,12 +494,13 @@ saving does not affect the returned image or the logging setting.
 def set_logging(enabled: bool) -> None:
     """Enable or disable generation provenance logging."""
 
+
 def is_logging() -> bool:
     """Return whether generation provenance logging is enabled."""
 ```
 
 When enabled, each draw writes JSON provenance under `root/logs/runs`, including
-the prompt, model, seeds, references, effects, output paths, backend revision,
+the prompt, model, seeds, references, effects, output paths, backend versions,
 and memory measurements.
 
 ## Execution API
@@ -453,9 +521,11 @@ later workflow, even when saving is disabled:
 ```python
 first = draw(original_workflow)
 
+
 def photofy():
     use_image(first)
     return "Convert this image to a photorealistic style"
+
 
 second = draw(photofy)
 ```
@@ -490,20 +560,21 @@ active model and workflow effects.
 `characters/alice/front`. If its filename stem is unique, it can also be
 resolved as `front`.
 
-## Backend behavior
+## Verification
 
-The package configures ComfyUI for normal VRAM operation with dynamic VRAM,
-asynchronous offload, smart memory, BF16 VAE operation, and previews disabled.
+```bash
+pip install pytest
+pytest gen_image/tests -q  # From the repository root.
+pip check
+```
 
-Model files are checked against expected byte counts and SHA-256 digests before
-being accepted into persistent storage. Hugging Face's native cache remains
-under `temp_dir`; only complete, verified files are copied into
-`root_dir/models`.
+Provenance logs use schema 2 and record Diffusers/component revisions and
+quantization details instead of backend node information. `status()` reports
+backend package versions. Backend-specific diagnostic fields have changed;
+the public call signatures have not.
 
-Because normal ComfyUI startup is bypassed, the package explicitly registers
-the native sampler, FLUX, editing, and Qwen nodes it requires. Its node invoker
-supports both legacy ComfyUI call conventions and current V3
-`execute()`/`NodeOutput` nodes.
-
-The supported backend surface is deliberately narrow: the two documented model
-stacks and their required native nodes.
+Verified model and configuration files live under `root/models/huggingface/files`
+in repository/revision directories. Download verification markers include the
+file modification time, so changed files are hashed again. The disposable
+Hugging Face cache may be deleted between sessions; complete persistent files
+are reused without contacting the Hub.
