@@ -8,7 +8,6 @@ from .config import ModelId
 
 BASE_MODEL_ID = "Qwen/Qwen-Image-2.1"
 BASE_REVISION = "d26bb61231c349cf6b7896fa83353113880e1ba3"
-DIFFUSERS_REVISION = "578c9b2c6636ab2424a0e56186268b83623656b2"
 
 MODEL_ALIASES = {
     "qwen": "qwen",

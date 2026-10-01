@@ -8,7 +8,7 @@ from importlib.metadata import version
 from pathlib import Path
 from typing import Any
 
-from .registry import BASE_MODEL_ID, DIFFUSERS_REVISION
+from .registry import BASE_MODEL_ID
 
 
 async def initialize_backend(paths: Any) -> dict[str, Any]:
@@ -51,7 +51,6 @@ async def initialize_backend(paths: Any) -> dict[str, Any]:
                     "torchvision",
                 )
             },
-            "diffusers_revision": DIFFUSERS_REVISION,
         },
     }
 

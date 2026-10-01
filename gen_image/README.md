@@ -7,20 +7,32 @@ seeds, saving controls, and logging controls remain available.
 
 ## Installation
 
-Use a fresh Python 3.11+ environment on a CUDA machine with BF16 support
-(Ampere or newer). Install a CUDA build of PyTorch 2.12.1 and the matching
-Torchvision build using the [official PyTorch instructions](https://pytorch.org/get-started/locally/),
-then install this branch:
+Use Python 3.11+ on a CUDA machine with BF16 support (Ampere or newer).
+Install this branch into your existing environment, including Colab:
 
 ```bash
-pip install "git+https://github.com/dearmadisonblue/deep_research.git@experimental/qwen21-diffusers#subdirectory=gen_image"
+pip install --upgrade "git+https://github.com/dearmadisonblue/deep_research.git@experimental/qwen21-diffusers#subdirectory=gen_image"
 ```
 
-Diffusers is pinned to a source commit that implements `QwenImage21Pipeline`.
-Torch, TorchAO, Transformers, Accelerate, and PEFT are pinned in `pyproject.toml`.
-The source pin needs Git during installation. `init()` never installs packages
-or clones a backend at runtime. Restart an existing notebook kernel after
-installation so it uses the installed versions.
+Diffusers is installed from the official GitHub default branch, without a
+fixed commit or version, because the current PyPI release does not yet include
+Qwen 2.1 support. All other dependencies are ordinary, unversioned package
+requirements. Pip can reuse already-installed packages; this package does not
+pin or request a replacement ML stack. Dependencies of the libraries themselves
+can still impose their own compatibility requirements.
+
+Installing this package also installs its GitHub Diffusers dependency; no
+separate Diffusers installation command is needed. Restart an existing notebook
+session after installation before importing the package again. There is no
+automatic library installation during `init()`.
+
+The installed Diffusers library must provide `QwenImage21Pipeline`,
+`QwenImage21Transformer2DModel`, and `AutoencoderKLQwenImage21`; TorchAO must
+support the checkpoint's saved `Int8Tensor` serialization. `init()` checks the
+required imports and records actual installed package versions. It never
+installs packages or clones a backend at runtime.
+If installation changes a library already imported in a notebook, restart the
+session before importing it again.
 
 ## Source layout
 
@@ -174,8 +186,10 @@ display(image)  # In a notebook; image.show() in a desktop Python session.
 Then try an edit with `use_image(image)`, guidance/negative prompts, your Qwen
 2.1 adapters, and batching. The CPU tests cover checkpoint reconstruction,
 architecture compatibility, FP8 layer hooks, real PEFT adapter switching,
-workflow arguments, and existing API behavior. A separate miniature random-weight
-CPU trial also completed text-to-image and reference-image editing with RGBA
+workflow arguments, and existing API behavior. They passed in the existing
+development test environment, which has Diffusers `0.41.0.dev0`; they do not
+establish compatibility with the ordinary `0.40.0` release. A separate miniature
+random-weight CPU trial also completed text-to-image and reference-image editing with RGBA
 output, CFG, and KV caching. **Full-size CUDA inference and
 image quality have not been tested in the development workspace.**
 
